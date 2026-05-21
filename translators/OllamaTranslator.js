@@ -70,29 +70,29 @@ class OllamaTranslator {
 		const headers = { 'Content-Type': 'application/json' };
 		if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
 
-		// Abort if the server does not respond within inferenceTimeout ms.
-		const controller = new AbortController();
-		const timeoutId = setTimeout(() => controller.abort(), this.inferenceTimeout);
+		// Timeout via Promise.race — AbortSignal cannot cross the postMessage bridge
+		// used by Linguist's custom translator sandbox on Chromium MV3.
+		const fetchPromise = fetch(`${base}/api/chat`, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify({
+				model: this.model,
+				messages: [{ role: 'user', content: prompt }],
+				stream: false,
+			}),
+		});
+		const timeoutPromise = new Promise((_, reject) =>
+			setTimeout(
+				() => reject(new Error(`Ollama request timed out after ${this.inferenceTimeout / 1000}s`)),
+				this.inferenceTimeout,
+			),
+		);
 
 		let response;
 		try {
-			response = await fetch(`${base}/api/chat`, {
-				method: 'POST',
-				headers,
-				signal: controller.signal,
-				body: JSON.stringify({
-					model: this.model,
-					messages: [{ role: 'user', content: prompt }],
-					stream: false,
-				}),
-			});
+			response = await Promise.race([fetchPromise, timeoutPromise]);
 		} catch (e) {
-			if (e.name === 'AbortError') {
-				throw new Error(`Ollama request timed out after ${this.inferenceTimeout / 1000}s`);
-			}
 			throw e;
-		} finally {
-			clearTimeout(timeoutId);
 		}
 
 		if (!response.ok) {
