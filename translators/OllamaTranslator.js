@@ -20,7 +20,7 @@ class OllamaTranslator {
 	// URL of your Ollama instance
 	// Local:   http://localhost:11434
 	// Private: https://ollama.yourhomelab.com
-	serverUrl = 'https://ollama.yourhomelab.com';
+	serverUrl = 'http://localhost:11434';
 
 	// Model to use for translation (must be pulled on your Ollama instance)
 	// Recommended: translategemma
