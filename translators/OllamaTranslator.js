@@ -51,14 +51,16 @@ class OllamaTranslator {
 				stream: false,
 			}),
 		});
-		const timeoutPromise = new Promise((_, reject) =>
-			setTimeout(
+		let timeoutId;
+		const timeoutPromise = new Promise((_, reject) => {
+			timeoutId = setTimeout(
 				() => reject(new Error(`Ollama request timed out after ${this.inferenceTimeout / 1000}s`)),
 				this.inferenceTimeout,
-			),
-		);
+			);
+		});
 
 		const response = await Promise.race([fetchPromise, timeoutPromise]);
+		clearTimeout(timeoutId);
 
 		if (!response.ok) {
 			throw new Error(`Ollama error ${response.status}: ${response.statusText}`);
