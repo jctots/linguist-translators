@@ -34,6 +34,40 @@ class OllamaTranslator {
 	// Increase for large pages or slow hardware; decrease for fast local servers.
 	inferenceTimeout = 120_000;
 
+	// Send a single prompt to /api/chat and return the model's text response.
+	// Timeout via Promise.race — AbortSignal cannot cross the postMessage bridge
+	// used by Linguist's custom translator sandbox on Chromium MV3.
+	_chat = async (prompt) => {
+		const base = this.serverUrl.replace(/\/+$/, '');
+		const headers = { 'Content-Type': 'application/json' };
+		if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+
+		const fetchPromise = fetch(`${base}/api/chat`, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify({
+				model: this.model,
+				messages: [{ role: 'user', content: prompt }],
+				stream: false,
+			}),
+		});
+		const timeoutPromise = new Promise((_, reject) =>
+			setTimeout(
+				() => reject(new Error(`Ollama request timed out after ${this.inferenceTimeout / 1000}s`)),
+				this.inferenceTimeout,
+			),
+		);
+
+		const response = await Promise.race([fetchPromise, timeoutPromise]);
+
+		if (!response.ok) {
+			throw new Error(`Ollama error ${response.status}: ${response.statusText}`);
+		}
+
+		const data = await response.json();
+		return data.message?.content?.trim() ?? '';
+	};
+
 	translate = async (text, from, to) => {
 		const toName = OllamaTranslator.langName(to);
 		const toCode = to;
@@ -66,41 +100,7 @@ class OllamaTranslator {
 				wrappedText;
 		}
 
-		const base = this.serverUrl.replace(/\/+$/, '');
-		const headers = { 'Content-Type': 'application/json' };
-		if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
-
-		// Timeout via Promise.race — AbortSignal cannot cross the postMessage bridge
-		// used by Linguist's custom translator sandbox on Chromium MV3.
-		const fetchPromise = fetch(`${base}/api/chat`, {
-			method: 'POST',
-			headers,
-			body: JSON.stringify({
-				model: this.model,
-				messages: [{ role: 'user', content: prompt }],
-				stream: false,
-			}),
-		});
-		const timeoutPromise = new Promise((_, reject) =>
-			setTimeout(
-				() => reject(new Error(`Ollama request timed out after ${this.inferenceTimeout / 1000}s`)),
-				this.inferenceTimeout,
-			),
-		);
-
-		let response;
-		try {
-			response = await Promise.race([fetchPromise, timeoutPromise]);
-		} catch (e) {
-			throw e;
-		}
-
-		if (!response.ok) {
-			throw new Error(`Ollama error ${response.status}: ${response.statusText}`);
-		}
-
-		const data = await response.json();
-		return data.message?.content?.trim() ?? '';
+		return this._chat(prompt);
 	};
 
 	translateBatch = async (texts, from, to) => {
@@ -159,50 +159,19 @@ class OllamaTranslator {
 					numberedItems;
 			}
 
-			const base = this.serverUrl.replace(/\/+$/, '');
-			const headers = { 'Content-Type': 'application/json' };
-			if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+			const rawOutput = await this._chat(prompt);
 
-			const fetchPromise = fetch(`${base}/api/chat`, {
-				method: 'POST',
-				headers,
-				body: JSON.stringify({
-					model: this.model,
-					messages: [{ role: 'user', content: prompt }],
-					stream: false,
-				}),
-			});
-			const timeoutPromise = new Promise((_, reject) =>
-				setTimeout(
-					() => reject(new Error(`Ollama request timed out after ${this.inferenceTimeout / 1000}s`)),
-					this.inferenceTimeout,
-				),
-			);
-
-			let response;
-			try {
-				response = await Promise.race([fetchPromise, timeoutPromise]);
-			} catch (e) {
-				throw e;
-			}
-
-			if (!response.ok) {
-				throw new Error(`Ollama error ${response.status}: ${response.statusText}`);
-			}
-
-			const data = await response.json();
-			const rawOutput = data.message?.content?.trim() ?? '';
-
-			// Parse numbered lines: "1. translation" or "1) translation"
-			const lines = rawOutput.split('\n');
+			// Split on newlines that precede a numbered marker so multi-line
+			// translations are captured as a single block, not truncated.
+			const segments = rawOutput.split(/\n(?=\d+[.)]\s)/);
 			const parsed = new Map();
-			for (const line of lines) {
-				const match = line.match(/^(\d+)[.)]\s+(.*)/);
+			for (const segment of segments) {
+				const match = segment.match(/^(\d+)[.)]\s+([\s\S]*)/);
 				if (match) parsed.set(parseInt(match[1], 10), match[2].trim());
 			}
 
 			for (let i = 0; i < batch.length; i++) {
-				// Fall back to original text if the model didn't return a numbered line
+				// Fall back to original text if the model didn't return a numbered block
 				results[batch[i].index] = parsed.get(i + 1) ?? batch[i].text;
 			}
 		}
