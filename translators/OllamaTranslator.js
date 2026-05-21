@@ -1,0 +1,116 @@
+/**
+ * Ollama — run large language models locally or on a private server
+ * Homepage: https://ollama.com/
+ * API docs: https://github.com/ollama/ollama/blob/main/docs/api.md
+ *
+ * Setup:
+ *   1. Install Ollama: https://ollama.com/download
+ *   2. Pull a model: ollama pull translategemma (recommended) or llama3.2
+ *   3. Set serverUrl below (default: http://localhost:11434)
+ *   4. Set model to the name of the model you pulled
+ *
+ * For a private server, set serverUrl to e.g. https://ollama.yourhomelab.com
+ * If your server requires an API key, set apiKey accordingly.
+ *
+ * Recommended model: translategemma (https://ollama.com/library/translategemma)
+ * A translation-specific model based on Gemma. Works well with the prompt
+ * format used by this translator.
+ */
+class OllamaTranslator {
+	// URL of your Ollama instance
+	// Local:   http://localhost:11434
+	// Private: https://ollama.yourhomelab.com
+	serverUrl = 'http://localhost:11434';
+
+	// Model to use for translation (must be pulled on your Ollama instance)
+	// Recommended: translategemma
+	// Others:      llama3.2, gemma3, mistral, qwen2.5
+	model = 'translategemma';
+
+	// API key — leave empty if your server does not require one
+	apiKey = '';
+
+	translate = async (text, from, to) => {
+		const toName = OllamaTranslator.langName(to);
+		const toCode = to;
+
+		let prompt;
+		if (from && from !== 'auto') {
+			const fromName = OllamaTranslator.langName(from);
+			const fromCode = from;
+			// translategemma-style prompt (also works well with general models)
+			prompt =
+				`You are a professional ${fromName} (${fromCode}) to ${toName} (${toCode}) translator. ` +
+				`Your goal is to accurately convey the meaning and nuances of the original ${fromName} text ` +
+				`while adhering to ${toName} grammar, vocabulary, and cultural sensitivities.\n` +
+				`Produce only the ${toName} translation, without any additional explanations or commentary. ` +
+				`Please translate the following ${fromName} text into ${toName}:\n\n${text}`;
+		} else {
+			// Auto-detect: omit source language from the prompt
+			prompt =
+				`You are a professional translator. Your goal is to accurately convey the meaning and nuances ` +
+				`of the original text while adhering to ${toName} (${toCode}) grammar, vocabulary, and cultural sensitivities.\n` +
+				`Produce only the ${toName} translation, without any additional explanations or commentary. ` +
+				`Please translate the following text into ${toName}:\n\n${text}`;
+		}
+
+		const base = this.serverUrl.replace(/\/+$/, '');
+		const headers = { 'Content-Type': 'application/json' };
+		if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+
+		const response = await fetch(`${base}/api/chat`, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify({
+				model: this.model,
+				messages: [{ role: 'user', content: prompt }],
+				stream: false,
+			}),
+		});
+
+		if (!response.ok) {
+			throw new Error(`Ollama error ${response.status}: ${response.statusText}`);
+		}
+
+		const data = await response.json();
+		return data.message?.content?.trim() ?? '';
+	};
+
+	translateBatch = (texts, from, to) =>
+		Promise.all(texts.map((text) => this.translate(text, from, to)));
+
+	getLengthLimit = () => 4000;
+	getRequestsTimeout = () => 500;
+	checkLimitExceeding = (text) => {
+		const textLength = !Array.isArray(text)
+			? text.length
+			: text.reduce((len, t) => len + t.length, 0);
+		return textLength - this.getLengthLimit();
+	};
+
+	static isSupportedAutoFrom = () => true;
+	// prettier-ignore
+	static getSupportedLanguages = () => [
+		"en", "nl", "de", "fr", "es", "it", "pt", "ru",
+		"ja", "zh", "ko", "ar", "tr", "pl", "sv", "da",
+		"fi", "nb", "cs", "sk", "hu", "ro", "bg", "uk",
+		"el", "he", "hi", "th", "vi", "id", "ms"
+	];
+
+	// Map ISO 639-1 code to full language name for the prompt
+	static langName = (code) => {
+		const names = {
+			en: 'English', nl: 'Dutch', de: 'German', fr: 'French',
+			es: 'Spanish', it: 'Italian', pt: 'Portuguese', ru: 'Russian',
+			ja: 'Japanese', zh: 'Chinese', ko: 'Korean', ar: 'Arabic',
+			tr: 'Turkish', pl: 'Polish', sv: 'Swedish', da: 'Danish',
+			fi: 'Finnish', nb: 'Norwegian', cs: 'Czech', sk: 'Slovak',
+			hu: 'Hungarian', ro: 'Romanian', bg: 'Bulgarian', uk: 'Ukrainian',
+			el: 'Greek', he: 'Hebrew', hi: 'Hindi', th: 'Thai',
+			vi: 'Vietnamese', id: 'Indonesian', ms: 'Malay',
+		};
+		return names[code] ?? code;
+	};
+}
+
+OllamaTranslator;
